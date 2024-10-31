@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASL Prediction with YOLOv5</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        #video-canvas {
+            border: 2px solid black;
+            margin-top: 20px;
+        }
+
+        #controls {
+            margin: 20px;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #upload-form {
+            margin-top: 20px;
+        }
+
+        input[type="file"] {
+            margin: 10px;
+        }
+
+        #uploaded-canvas {
+            margin-top: 20px;
+            border: 2px solid black;
+        }
+    </style>
+</head>
+<body>
+    <h1>ASL Prediction with YOLOv5</h1>
+
+    <!-- Video feed canvas for real-time detection -->
+    <canvas id="video-canvas" width="640" height="480"></canvas>
+
+    <!-- Control buttons for real-time processing -->
+    <div id="controls">
+        <button id="start-btn">Start Real-Time Detection</button>
+        <button id="stop-btn" disabled>Stop Real-Time Detection</button>
+    </div>
+
+    <!-- Form for uploading image for ASL Prediction -->
+    <div id="upload-form">
+        <h2>Upload an Image for ASL Prediction</h2>
+        <input type="file" id="file-input" accept="image/*">
+        <button id="upload-btn">Upload</button>
+        <div id="upload-result"></div>
+    </div>
+
+    <!-- Display uploaded image with bounding boxes using canvas -->
+    <canvas id="uploaded-canvas" width="640" height="480" style="display:none;"></canvas>
+
+    <script>
+        const canvas = document.getElementById('video-canvas');
+        const ctx = canvas.getContext('2d');
+        let ws;
+
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const fileInput = document.getElementById('file-input');
+        const uploadBtn = document.getElementById('upload-btn');
+        const uploadResult = document.getElementById('upload-result');
+        const uploadedCanvas = document.getElementById('uploaded-canvas');
+        const uploadedCtx = uploadedCanvas.getContext('2d');
+
+        // Function to start WebSocket connection for real-time video feed
+        startBtn.addEventListener('click', () => {
+            ws = new WebSocket("ws://127.0.0.1:8000/ws");
+
+            ws.onmessage = function(event) {
+                const image = new Image();
+                image.src = 'data:image/jpeg;base64,' + event.data;
+                image.onload = function() {
+                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                };
+            };
+
+            ws.onclose = function(event) {
+                console.log("WebSocket connection closed");
+            };
+
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        });
+
+        // Function to stop WebSocket connection
+        stopBtn.addEventListener('click', () => {
+            if (ws) {
+                ws.close();
+                ws = null;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);  // Clear the canvas
+                console.log("Real-time detection stopped");
+            }
+
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        });
+
+        // Function to handle image upload
+        uploadBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select an image file first!');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/upload/', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    displayPredictions(data.predictions);
+                    const reader = new FileReader();
+
+                    reader.onload = function(e) {
+                        const img = new Image();
+                        img.src = e.target.result;
+                        img.onload = function() {
+                            drawBoundingBoxes(img, data.predictions);
+                        };
+                    };
+                    reader.readAsDataURL(file); // Read the image file and trigger the drawing process
+                } else {
+                    uploadResult.textContent = 'Error uploading the image. Try again.';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                uploadResult.textContent = 'Error uploading the image.';
+            }
+        });
+
+        // Function to display predictions
+        function displayPredictions(predictions) {
+            uploadResult.innerHTML = '<h3>Predictions:</h3>';
+            if (predictions.length > 0) {
+                predictions.forEach(prediction => {
+                    uploadResult.innerHTML += `
+                        <p>Label: ${prediction.name}, Confidence: ${Math.round(prediction.confidence * 100)}%</p>
+                    `;
+                });
+            } else {
+                uploadResult.innerHTML += '<p>No predictions found.</p>';
+            }
+        }
+
+        // Function to draw bounding boxes on the uploaded image
+        function drawBoundingBoxes(img, predictions) {
+            uploadedCanvas.width = img.width;
+            uploadedCanvas.height = img.height;
+            uploadedCtx.drawImage(img, 0, 0, img.width, img.height);  // Draw uploaded image on canvas
+
+            predictions.forEach(prediction => {
+                const { xmin, ymin, xmax, ymax, name } = prediction;
+                uploadedCtx.strokeStyle = 'green';
+                uploadedCtx.lineWidth = 2;
+                uploadedCtx.font = '20px Arial';
+                uploadedCtx.fillStyle = 'green';
+
+                // Draw bounding box
+                uploadedCtx.strokeRect(xmin, ymin, xmax - xmin, ymax - ymin);
+
+                // Draw label above the bounding box
+                uploadedCtx.fillText(name, xmin, ymin > 20 ? ymin - 5 : ymin + 20);
+            });
+
+            uploadedCanvas.style.display = 'block';  // Show the canvas with the processed image
+        }
+    </script>
+</body>
+</html>
